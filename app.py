@@ -10,7 +10,13 @@ from pydantic import BaseModel, Field
 
 from config import load_settings
 from graph import run_investigation
-from state import DeploymentEvent, EvidenceItem, LogFinding, MetricsSnapshot
+from state import (
+    DeploymentEvent,
+    EvidenceItem,
+    KubernetesFinding,
+    LogFinding,
+    MetricsSnapshot,
+)
 
 
 settings = load_settings()
@@ -32,9 +38,12 @@ class InvestigationResponse(BaseModel):
     metrics: MetricsSnapshot
     logs: list[LogFinding]
     deployments: list[DeploymentEvent]
+    kubernetes: list[KubernetesFinding]
     evidence: list[EvidenceItem]
     hypothesis: str
     confidence: float
+    reasoning: str
+    investigation_attempts: int
     report: str
 
 
@@ -56,9 +65,12 @@ def investigate(request: InvestigationRequest) -> InvestigationResponse:
         metrics=result["metrics"],
         logs=result["logs"],
         deployments=result["deployments"],
+        kubernetes=result["kubernetes"],
         evidence=result["evidence"],
         hypothesis=result["hypothesis"],
         confidence=result["confidence"],
+        reasoning=result["reasoning"],
+        investigation_attempts=result["investigation_attempts"],
         report=result["report"],
     )
 

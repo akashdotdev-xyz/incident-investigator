@@ -35,6 +35,14 @@ class EvidenceItem(TypedDict):
     summary: str
 
 
+class KubernetesFinding(TypedDict):
+    """A Kubernetes runtime signal collected during an investigation."""
+
+    namespace: str
+    pod: str
+    signal: str
+
+
 class IncidentState(TypedDict, total=False):
     """Shared graph state.
 
@@ -46,7 +54,10 @@ class IncidentState(TypedDict, total=False):
     metrics: MetricsSnapshot
     logs: list[LogFinding]
     deployments: list[DeploymentEvent]
+    kubernetes: list[KubernetesFinding]
     evidence: list[EvidenceItem]
     hypothesis: str
     confidence: float
+    reasoning: str
+    investigation_attempts: int
     report: str

@@ -89,8 +89,8 @@ investigation complexity.
 
 An investigation produces many different kinds of data: incident description,
 metrics, logs, deployments, evidence, hypotheses, confidence, and a final
-report. Passing each value as a separate argument between functions does not
-scale once the workflow branches or loops.
+reasoning trail, and a final report. Passing each value as a separate argument
+between functions does not scale once the workflow branches or loops.
 
 Graph state gives every node one shared contract:
 
@@ -119,6 +119,7 @@ place. That makes each step easier to test and makes state transitions visible.
 - `evidence`
 - `hypothesis`
 - `confidence`
+- `reasoning`
 - `report`
 
 Each node receives the current state and returns a partial update. LangGraph
@@ -321,6 +322,9 @@ START
   -> logs_collector
   -> deployment_collector
   -> analyzer
+  -> confidence_route
+  -> reporter | kubernetes_collector
+  -> kubernetes_collector -> analyzer
   -> reporter
   -> END
 ```
@@ -338,8 +342,9 @@ Execution begins with:
 ```
 
 The planner initializes the shared state. Each collector adds its own evidence.
-The analyzer reads the collected state and writes `hypothesis` and
-`confidence`. The reporter reads the full state and writes the final RCA draft.
+The analyzer reads the collected state and writes `hypothesis`, `confidence`,
+and `reasoning`. The reporter reads the full state and writes the final RCA
+draft.
 
 ### Tradeoffs
 
@@ -357,6 +362,211 @@ Explicit orchestration is useful for:
 - inserting human approval between nodes
 - replacing a linear edge with conditional routing
 - checkpointing state after every step
+
+## Phase 7: LLM Integration
+
+### What Problem This Phase Solves
+
+The deterministic analyzer can only detect rules we explicitly write. Real
+incidents are messier: symptoms may be incomplete, evidence may conflict, and
+the system needs to explain uncertainty.
+
+This phase introduces an OpenAI-backed analyzer using the prompt:
+
+```text
+You are an SRE engineer.
+```
+
+The analyzer generates:
+
+- `hypothesis`
+- `confidence`
+- `reasoning`
+
+### Why Python Alone Is Insufficient
+
+Python is reliable for deterministic checks, parsing, and formatting. It is not
+a general reasoning system unless we encode every possible rule. For incident
+analysis, that quickly becomes brittle because failures vary across services,
+deployments, infrastructure, and dependencies.
+
+An LLM can synthesize the collected state into a plausible RCA hypothesis while
+explaining how strongly the evidence supports it.
+
+### How LangGraph Solves It
+
+The analyzer remains a normal graph node:
+
+```text
+deployment_collector -> analyzer -> reporter
+```
+
+Only the node implementation changes. It reads the same `IncidentState` and
+returns the same state keys:
+
+```python
+{
+    "hypothesis": "...",
+    "confidence": 0.82,
+    "reasoning": "...",
+}
+```
+
+That means graph topology, collectors, tools, and reporter do not need to know
+whether the analysis came from OpenAI or a local fallback.
+
+### Structured Output
+
+The OpenAI path uses a Pydantic model called `AnalysisResult` so the LLM returns
+typed fields instead of free-form prose. This reduces parsing ambiguity and
+makes downstream routing possible in later phases.
+
+### Tradeoffs
+
+LLMs add latency, cost, API key management, and possible parsing failures. To
+keep every phase runnable, the analyzer falls back to deterministic local logic
+when `OPENAI_API_KEY` is not configured.
+
+### Production Use Cases
+
+LLM-backed analysis is useful for:
+
+- summarizing mixed evidence from many observability systems
+- explaining confidence in a hypothesis
+- producing RCA drafts for human review
+- deciding whether more evidence is needed
+- routing future graph execution based on confidence
+
+## Phase 8: Conditional Routing
+
+### What Problem This Phase Solves
+
+The graph should not always report immediately after analysis. If the analyzer
+has high confidence, reporting is reasonable. If confidence is low, the system
+should collect more evidence before producing the RCA draft.
+
+This phase adds the first adaptive branch:
+
+```text
+analyzer
+  -> confidence >= 0.8 -> reporter
+  -> confidence < 0.8  -> kubernetes_collector
+```
+
+### Why Python Alone Is Insufficient
+
+A regular Python implementation would put this inside procedural code:
+
+```python
+if state["confidence"] >= 0.8:
+    state = reporter(state)
+else:
+    state = kubernetes_collector(state)
+```
+
+That works for one branch, but real workflows accumulate many decisions:
+confidence gates, missing evidence checks, escalation paths, retries, and human
+approval. Nested conditionals become hard to visualize, test, stream, and
+checkpoint.
+
+### How LangGraph Solves It
+
+LangGraph keeps the decision in graph topology. The analyzer writes
+`confidence` into state. Then `route_after_analysis()` reads that state and
+returns the next node name:
+
+```python
+def route_after_analysis(state: IncidentState) -> str:
+    if state.get("confidence", 0.0) >= 0.8:
+        return "reporter"
+    return "kubernetes_collector"
+```
+
+The graph registers that decision with `add_conditional_edges()`. The analyzer
+does not know where the workflow goes next; it only analyzes evidence.
+
+### Tradeoffs
+
+Conditional routing makes graph construction more explicit. The benefit is that
+branches are observable and testable as workflow decisions. Later phases can
+replace the one-time extra evidence path with a loop.
+
+### Production Use Cases
+
+Conditional routing is useful for:
+
+- collecting more logs when confidence is low
+- escalating to a human when evidence conflicts
+- skipping expensive tools when confidence is high
+- routing security incidents differently from availability incidents
+- deciding whether to open a ticket, page an owner, or draft an RCA
+
+## Phase 9: Investigation Loop
+
+### What Problem This Phase Solves
+
+One extra evidence step is often not enough. A real investigation may need to
+analyze, notice weak confidence, collect another signal, and analyze again.
+
+This phase introduces a cycle:
+
+```text
+analyzer
+  -> confidence < 0.8
+  -> kubernetes_collector
+  -> analyzer
+```
+
+The Kubernetes collector returns pod-level runtime evidence:
+
+- pod restarts
+- `CrashLoopBackOff`
+- `OOMKilled`
+
+### Why Python Alone Is Insufficient
+
+A Python `while` loop can repeat work:
+
+```python
+while confidence < 0.8:
+    state = kubernetes_collector(state)
+    state = analyzer(state)
+```
+
+That works locally, but the loop is not visible as workflow topology. It is
+harder to stream progress, checkpoint between attempts, resume after a crash, or
+inspect which node caused the workflow to continue.
+
+### How LangGraph Solves It
+
+LangGraph allows cycles by adding an edge back to an earlier node:
+
+```text
+kubernetes_collector -> analyzer
+```
+
+The analyzer remains responsible only for analysis. The graph owns the loop. The
+state tracks `investigation_attempts`, and `route_after_analysis()` stops the
+loop when either:
+
+- confidence is at least `0.8`
+- `MAX_INVESTIGATION_ATTEMPTS` is reached
+
+### Tradeoffs
+
+Cycles need guardrails. Without a retry limit, a graph can loop forever. The
+retry count belongs in state because it should be visible in reports, logs,
+checkpoints, and future API status endpoints.
+
+### Production Use Cases
+
+Bounded investigation loops are useful for:
+
+- progressively gathering Kubernetes, database, and network evidence
+- stopping before an investigation burns too much time or budget
+- checkpointing after every attempt
+- exposing retry progress to an operator
+- escalating to a human after repeated low-confidence analysis
 
 ## Installation
 
@@ -384,7 +594,15 @@ Copy the sample environment file if needed:
 cp .env.example .env
 ```
 
-No API key is required for the current phase.
+No API key is required to run the current phase because the analyzer has a
+deterministic fallback.
+
+To enable the LLM analyzer, set:
+
+```bash
+OPENAI_API_KEY=your_api_key
+OPENAI_MODEL=gpt-4.1-mini
+```
 
 ## Run Locally
 
@@ -437,14 +655,37 @@ Expected response:
       "status": "deployed 12 minutes before incident"
     }
   ],
+  "kubernetes": [
+    {
+      "namespace": "production",
+      "pod": "checkout-service-7d9f4c8f9b-x2k4m",
+      "signal": "Pod restarted 4 times in 10 minutes."
+    },
+    {
+      "namespace": "production",
+      "pod": "checkout-service-7d9f4c8f9b-x2k4m",
+      "signal": "Previous container state was CrashLoopBackOff."
+    },
+    {
+      "namespace": "production",
+      "pod": "checkout-service-7d9f4c8f9b-x2k4m",
+      "signal": "Last termination reason was OOMKilled."
+    }
+  ],
   "evidence": [
     {
       "source": "metrics",
       "summary": "Latency is elevated at 1250 ms while CPU is high at 82.5%."
+    },
+    {
+      "source": "kubernetes",
+      "summary": "Checkout-service pods restarted repeatedly with CrashLoopBackOff and OOMKilled signals."
     }
   ],
-  "hypothesis": "The checkout-service deployment likely introduced a regression that increased latency and triggered downstream payment timeouts.",
-  "confidence": 0.7,
+  "hypothesis": "The checkout-service deployment likely introduced a memory regression that caused pod restarts, CrashLoopBackOff, and downstream payment timeouts.",
+  "confidence": 0.85,
+  "reasoning": "Latency is above 1000 ms, checkout-service changed shortly before the incident, logs show downstream payment timeouts, and Kubernetes reports restarts with OOMKilled termination.",
+  "investigation_attempts": 1,
   "report": "# Root Cause Analysis Draft\n..."
 }
 ```
@@ -457,5 +698,5 @@ pytest
 
 ## Roadmap
 
-The next phase replaces the deterministic analyzer with an OpenAI-backed SRE
-analysis prompt that generates the hypothesis, confidence, and reasoning.
+The next phase introduces LangChain tool calling so the LLM can choose whether
+it needs logs, metrics, deployments, or Kubernetes evidence.

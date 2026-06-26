@@ -17,8 +17,11 @@ def planner_node(state: IncidentState) -> IncidentState:
         "metrics": {},
         "logs": [],
         "deployments": [],
+        "kubernetes": [],
         "evidence": [],
         "hypothesis": "",
         "confidence": 0.0,
+        "reasoning": "",
+        "investigation_attempts": 0,
         "report": "Investigation started.",
     }

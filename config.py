@@ -20,6 +20,7 @@ class Settings:
     app_env: str = "development"
     log_level: str = "INFO"
     openai_api_key: str | None = None
+    openai_model: str = "gpt-4.1-mini"
     anthropic_api_key: str | None = None
     langsmith_tracing: bool = False
     langsmith_api_key: str | None = None
@@ -41,6 +42,7 @@ def load_settings() -> Settings:
         app_env=os.getenv("APP_ENV", "development"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
         langsmith_tracing=_as_bool(os.getenv("LANGSMITH_TRACING")),
         langsmith_api_key=os.getenv("LANGSMITH_API_KEY") or None,
