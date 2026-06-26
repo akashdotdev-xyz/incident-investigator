@@ -2,26 +2,14 @@
 
 from __future__ import annotations
 
-from state import EvidenceItem, IncidentState, LogFinding
+from state import EvidenceItem, IncidentState
+from tools.logs_tool import search_service_logs
 
 
 def logs_collector_node(state: IncidentState) -> IncidentState:
-    """Collect deterministic log findings for the current incident."""
+    """Collect log findings for the current incident."""
 
-    logs: list[LogFinding] = [
-        {
-            "source": "checkout-service",
-            "message": "Timeout while calling payment-service.",
-        },
-        {
-            "source": "payment-service",
-            "message": "Database connection reset by peer.",
-        },
-        {
-            "source": "checkout-service",
-            "message": "Cache miss rate increased during checkout requests.",
-        },
-    ]
+    logs = search_service_logs("checkout-service")
     evidence: list[EvidenceItem] = [
         *state.get("evidence", []),
         {

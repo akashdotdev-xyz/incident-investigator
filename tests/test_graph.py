@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
-from graph import run_investigation
+from graph import NODE_SEQUENCE, ORCHESTRATION_PATH, run_investigation
+
+
+def test_graph_orchestration_path_is_explicit() -> None:
+    """The current graph should expose its execution order as a contract."""
+
+    assert ORCHESTRATION_PATH == (
+        "START",
+        "planner",
+        "metrics_collector",
+        "logs_collector",
+        "deployment_collector",
+        "analyzer",
+        "reporter",
+        "END",
+    )
+    assert NODE_SEQUENCE == ORCHESTRATION_PATH[1:-1]
 
 
 def test_graph_preserves_incident() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -14,24 +15,43 @@ from nodes.planner import planner_node
 from nodes.reporter import reporter_node
 from state import IncidentState
 
+NodeFunction = Callable[[IncidentState], IncidentState]
+
+NODE_SEQUENCE: tuple[str, ...] = (
+    "planner",
+    "metrics_collector",
+    "logs_collector",
+    "deployment_collector",
+    "analyzer",
+    "reporter",
+)
+"""Ordered workflow nodes for the current linear investigation graph."""
+
+ORCHESTRATION_PATH: tuple[str, ...] = ("START", *NODE_SEQUENCE, "END")
+"""Human-readable execution path for documentation and tests."""
+
+NODE_REGISTRY: dict[str, NodeFunction] = {
+    "planner": planner_node,
+    "metrics_collector": metrics_collector_node,
+    "logs_collector": logs_collector_node,
+    "deployment_collector": deployment_collector_node,
+    "analyzer": analyzer_node,
+    "reporter": reporter_node,
+}
+"""Mapping from graph node names to node functions."""
+
 
 def build_graph() -> Any:
     """Build and compile the current incident investigation graph."""
 
     graph = StateGraph(IncidentState)
-    graph.add_node("planner", planner_node)
-    graph.add_node("metrics_collector", metrics_collector_node)
-    graph.add_node("logs_collector", logs_collector_node)
-    graph.add_node("deployment_collector", deployment_collector_node)
-    graph.add_node("analyzer", analyzer_node)
-    graph.add_node("reporter", reporter_node)
+
+    for node_name in NODE_SEQUENCE:
+        graph.add_node(node_name, NODE_REGISTRY[node_name])
 
     graph.add_edge(START, "planner")
-    graph.add_edge("planner", "metrics_collector")
-    graph.add_edge("metrics_collector", "logs_collector")
-    graph.add_edge("logs_collector", "deployment_collector")
-    graph.add_edge("deployment_collector", "analyzer")
-    graph.add_edge("analyzer", "reporter")
+    for current_node, next_node in zip(NODE_SEQUENCE, NODE_SEQUENCE[1:]):
+        graph.add_edge(current_node, next_node)
     graph.add_edge("reporter", END)
 
     return graph.compile()

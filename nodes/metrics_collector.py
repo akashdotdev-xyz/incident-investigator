@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from state import EvidenceItem, IncidentState, MetricsSnapshot
+from state import EvidenceItem, IncidentState
+from tools.metrics_tool import get_service_metrics
 
 
 def metrics_collector_node(state: IncidentState) -> IncidentState:
-    """Collect deterministic metric signals for the current incident."""
+    """Collect metric signals for the current incident."""
 
-    metrics: MetricsSnapshot = {
-        "latency_ms": 1250.0,
-        "cpu_percent": 82.5,
-        "memory_percent": 76.0,
-    }
+    metrics = get_service_metrics("checkout-service")
     evidence: list[EvidenceItem] = [
         *state.get("evidence", []),
         {

@@ -208,6 +208,156 @@ different backend:
 - analysis from an LLM or a deterministic rules engine
 - reporting to an API, Slack, or an RCA document
 
+## Phase 5: Fake Investigation Tools
+
+### What Problem This Phase Solves
+
+Collector nodes should orchestrate investigation steps. They should not know the
+details of where metrics, logs, or deployments come from.
+
+This phase introduces a tool layer:
+
+- `tools/metrics_tool.py`
+- `tools/logs_tool.py`
+- `tools/deployment_tool.py`
+
+The tools still return deterministic fake data, but the boundary now looks like
+a production integration point.
+
+### Why Python Alone Is Insufficient
+
+Plain Python helper functions can hide fake data, but without a workflow
+boundary the same code often grows into mixed orchestration and IO. The node
+starts making decisions, formatting evidence, querying services, and handling
+tool-specific details all at once.
+
+LangGraph keeps the node as the workflow unit. The tool is just the data access
+adapter used by that node.
+
+### How LangGraph Solves It
+
+The graph still runs the same nodes:
+
+```text
+metrics_collector -> logs_collector -> deployment_collector
+```
+
+But each collector now calls a tool:
+
+```python
+metrics = get_service_metrics("checkout-service")
+logs = search_service_logs("checkout-service")
+deployments = get_recent_deployments("checkout-service")
+```
+
+State shape and graph routing do not change. Only the source of collected data
+changes.
+
+### Tradeoffs
+
+The tool layer adds more files. The benefit is replaceability: Phase 19 can swap
+fake tools for Prometheus, CloudWatch, ElasticSearch, GitHub, `kubectl`, or
+Docker while keeping the graph and nodes mostly unchanged.
+
+### Production Use Cases
+
+Tool boundaries make it easier to add:
+
+- retries and timeouts around external systems
+- authentication per backend
+- mock tools in tests
+- provider-specific clients behind stable interfaces
+- audit logs for every external observation
+
+## Phase 6: Graph Orchestration
+
+### What Problem This Phase Solves
+
+The investigation now has multiple nodes. The system needs an explicit
+definition of execution order:
+
+```text
+Planner
+  -> Metrics
+  -> Logs
+  -> Deployments
+  -> Analyzer
+  -> Reporter
+```
+
+Without an orchestration layer, that order would live inside nested function
+calls or a long procedural script.
+
+### Why Python Alone Is Insufficient
+
+Python can execute functions in sequence:
+
+```python
+state = planner(state)
+state = metrics_collector(state)
+state = logs_collector(state)
+```
+
+That is acceptable for a straight line, but it does not scale cleanly to
+conditional routing, cycles, streaming, checkpointing, or human approval. The
+workflow rules become mixed with business logic.
+
+### How LangGraph Solves It
+
+LangGraph separates workflow structure from node behavior:
+
+- `START` is the reserved graph entrypoint.
+- `END` is the reserved terminal point.
+- Nodes are named workflow steps.
+- Edges declare which node runs next.
+- State is passed from node to node and merged after every update.
+
+The current graph is:
+
+```text
+START
+  -> planner
+  -> metrics_collector
+  -> logs_collector
+  -> deployment_collector
+  -> analyzer
+  -> reporter
+  -> END
+```
+
+In code, the node order is exposed as `NODE_SEQUENCE` and the readable path is
+exposed as `ORCHESTRATION_PATH`. This makes the topology testable instead of
+being hidden inside graph construction.
+
+### State Propagation
+
+Execution begins with:
+
+```python
+{"incident": "checkout latency spike"}
+```
+
+The planner initializes the shared state. Each collector adds its own evidence.
+The analyzer reads the collected state and writes `hypothesis` and
+`confidence`. The reporter reads the full state and writes the final RCA draft.
+
+### Tradeoffs
+
+The graph is more explicit than a plain script. The benefit is that future
+phases can add conditional edges and loops by changing graph routing, not by
+rewriting every node.
+
+### Production Use Cases
+
+Explicit orchestration is useful for:
+
+- tracing which investigation step ran
+- streaming node progress to a client
+- retrying or timing out individual nodes
+- inserting human approval between nodes
+- replacing a linear edge with conditional routing
+- checkpointing state after every step
+
 ## Installation
 
 Python 3.12+ is recommended.
@@ -307,6 +457,5 @@ pytest
 
 ## Roadmap
 
-The next phase moves deterministic fake infrastructure responses into a
-dedicated tool layer. That keeps node orchestration separate from data
-collection mechanics.
+The next phase replaces the deterministic analyzer with an OpenAI-backed SRE
+analysis prompt that generates the hypothesis, confidence, and reasoning.

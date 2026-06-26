@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-from state import DeploymentEvent, EvidenceItem, IncidentState
+from state import EvidenceItem, IncidentState
+from tools.deployment_tool import get_recent_deployments
 
 
 def deployment_collector_node(state: IncidentState) -> IncidentState:
-    """Collect deterministic deployment events for the current incident."""
+    """Collect deployment events for the current incident."""
 
-    deployments: list[DeploymentEvent] = [
-        {
-            "service": "checkout-service",
-            "version": "2026.06.26-1",
-            "status": "deployed 12 minutes before incident",
-        },
-        {
-            "service": "payment-service",
-            "version": "2026.06.25-4",
-            "status": "unchanged",
-        },
-    ]
+    deployments = get_recent_deployments("checkout-service")
     evidence: list[EvidenceItem] = [
         *state.get("evidence", []),
         {
