@@ -1,14 +1,31 @@
-"""Tests for the minimal LangGraph workflow."""
+"""Tests for the LangGraph investigation workflow."""
 
 from __future__ import annotations
 
 from graph import run_investigation
 
 
-def test_minimal_graph_starts_investigation() -> None:
-    """The planner should start the investigation and preserve the incident."""
+def test_graph_preserves_incident() -> None:
+    """The graph should preserve the incident across all nodes."""
 
     result = run_investigation("checkout latency spike")
 
     assert result["incident"] == "checkout latency spike"
-    assert result["report"] == "Investigation started."
+
+
+def test_graph_collects_evidence_and_generates_report() -> None:
+    """The full Phase 4 graph should collect evidence and draft an RCA."""
+
+    result = run_investigation("checkout latency spike")
+
+    assert result["metrics"]["latency_ms"] == 1250.0
+    assert len(result["logs"]) == 3
+    assert result["deployments"][0]["service"] == "checkout-service"
+    assert [item["source"] for item in result["evidence"]] == [
+        "metrics",
+        "logs",
+        "deployments",
+    ]
+    assert "checkout-service deployment" in result["hypothesis"]
+    assert result["confidence"] == 0.7
+    assert "# Root Cause Analysis Draft" in result["report"]

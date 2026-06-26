@@ -83,6 +83,131 @@ Investigation started.
 This proves the state, node, edge, and graph execution path works before adding
 investigation complexity.
 
+## Phase 3: Shared State
+
+### What Problem This Phase Solves
+
+An investigation produces many different kinds of data: incident description,
+metrics, logs, deployments, evidence, hypotheses, confidence, and a final
+report. Passing each value as a separate argument between functions does not
+scale once the workflow branches or loops.
+
+Graph state gives every node one shared contract:
+
+```python
+def node(state: IncidentState) -> IncidentState:
+    return {"evidence": [...]}  # partial update
+```
+
+### Why Python Alone Is Insufficient
+
+A normal mutable dictionary works for a short script, but it makes workflow
+behavior implicit. Any function can mutate any key at any time, which makes
+retries, tests, and recovery harder.
+
+LangGraph encourages nodes to return updates instead of modifying the input in
+place. That makes each step easier to test and makes state transitions visible.
+
+### How LangGraph Solves It
+
+`IncidentState` is a `TypedDict` that defines the shared state shape:
+
+- `incident`
+- `metrics`
+- `logs`
+- `deployments`
+- `evidence`
+- `hypothesis`
+- `confidence`
+- `report`
+
+Each node receives the current state and returns a partial update. LangGraph
+merges that update into the next state before following the next edge.
+
+### Tradeoffs
+
+Typed state requires upfront modeling. The benefit is that later phases can add
+collectors, analyzers, conditional routes, checkpoints, and reports without
+changing how data moves through the graph.
+
+### Production Use Cases
+
+Shared state is the backbone for:
+
+- resuming an investigation after a worker restart
+- showing partial progress to an API client
+- auditing what evidence led to a hypothesis
+- routing based on confidence or missing evidence
+- handing state from one specialist agent to another
+
+## Phase 4: Investigation Nodes
+
+### What Problem This Phase Solves
+
+An incident investigation has distinct responsibilities:
+
+- plan the investigation
+- collect metrics
+- collect logs
+- collect deployment data
+- analyze the evidence
+- report the result
+
+Keeping these responsibilities in separate nodes prevents one large function
+from becoming the whole system.
+
+### Why Python Alone Is Insufficient
+
+Python functions can separate code, but they do not describe workflow
+execution. The order, state passing, retries, streaming, and future branching
+still have to be managed manually.
+
+LangGraph nodes make each step part of an explicit workflow. The node remains a
+plain Python function, but the graph owns when it runs and how its returned
+state update moves forward.
+
+### How LangGraph Solves It
+
+The current graph is linear:
+
+```text
+START
+  -> planner
+  -> metrics_collector
+  -> logs_collector
+  -> deployment_collector
+  -> analyzer
+  -> reporter
+  -> END
+```
+
+Each node has one responsibility and returns only the keys it owns. Collectors
+append evidence immutably by returning a new evidence list:
+
+```python
+return {
+    "metrics": metrics,
+    "evidence": [*state.get("evidence", []), new_item],
+}
+```
+
+### Tradeoffs
+
+More nodes means more files and tests. The benefit is that each investigation
+step can be replaced independently later. In Phase 5, the collectors will call a
+tool layer instead of keeping fake data inside the node.
+
+### Production Use Cases
+
+This structure maps to real incident systems where each node may call a
+different backend:
+
+- metrics from Prometheus or CloudWatch
+- logs from ElasticSearch or CloudWatch Logs
+- deployments from GitHub, Argo CD, or Kubernetes
+- analysis from an LLM or a deterministic rules engine
+- reporting to an API, Slack, or an RCA document
+
 ## Installation
 
 Python 3.12+ is recommended.
@@ -122,7 +247,7 @@ python app.py "checkout latency spike"
 Expected output:
 
 ```text
-Investigation started.
+# Root Cause Analysis Draft
 ```
 
 API:
@@ -144,7 +269,33 @@ Expected response:
 ```json
 {
   "incident": "checkout latency spike",
-  "report": "Investigation started."
+  "metrics": {
+    "latency_ms": 1250.0,
+    "cpu_percent": 82.5,
+    "memory_percent": 76.0
+  },
+  "logs": [
+    {
+      "source": "checkout-service",
+      "message": "Timeout while calling payment-service."
+    }
+  ],
+  "deployments": [
+    {
+      "service": "checkout-service",
+      "version": "2026.06.26-1",
+      "status": "deployed 12 minutes before incident"
+    }
+  ],
+  "evidence": [
+    {
+      "source": "metrics",
+      "summary": "Latency is elevated at 1250 ms while CPU is high at 82.5%."
+    }
+  ],
+  "hypothesis": "The checkout-service deployment likely introduced a regression that increased latency and triggered downstream payment timeouts.",
+  "confidence": 0.7,
+  "report": "# Root Cause Analysis Draft\n..."
 }
 ```
 
@@ -156,7 +307,6 @@ pytest
 
 ## Roadmap
 
-The next phase expands `IncidentState` with metrics, logs, deployments,
-evidence, hypothesis, confidence, and report fields. That will demonstrate why
-shared graph state matters and how immutable node updates keep each step
-predictable.
+The next phase moves deterministic fake infrastructure responses into a
+dedicated tool layer. That keeps node orchestration separate from data
+collection mechanics.

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from config import load_settings
 from graph import run_investigation
+from state import DeploymentEvent, EvidenceItem, LogFinding, MetricsSnapshot
 
 
 settings = load_settings()
@@ -25,9 +26,15 @@ class InvestigationRequest(BaseModel):
 
 
 class InvestigationResponse(BaseModel):
-    """Response body for the current minimal investigation graph."""
+    """Response body for the current investigation graph state."""
 
     incident: str
+    metrics: MetricsSnapshot
+    logs: list[LogFinding]
+    deployments: list[DeploymentEvent]
+    evidence: list[EvidenceItem]
+    hypothesis: str
+    confidence: float
     report: str
 
 
@@ -46,6 +53,12 @@ def investigate(request: InvestigationRequest) -> InvestigationResponse:
     result = run_investigation(request.incident)
     return InvestigationResponse(
         incident=result["incident"],
+        metrics=result["metrics"],
+        logs=result["logs"],
+        deployments=result["deployments"],
+        evidence=result["evidence"],
+        hypothesis=result["hypothesis"],
+        confidence=result["confidence"],
         report=result["report"],
     )
 
